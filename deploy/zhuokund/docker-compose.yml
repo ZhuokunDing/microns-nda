@@ -12,6 +12,8 @@ x-shared: &common
   volumes:
     - ../../:/src/microns-nda
     - /mnt:/mnt
+    - ${NOTEBOOK_PATH}:/notebook
+    - ${DATA_PATH}:/data
   env_file:
     - .env
 
@@ -20,7 +22,7 @@ services:
     <<: *common
     ports:
         - "${JUPYTER_HOST:-0.0.0.0}:${JUPYTER_PORT_CONTAINER:-8888}:8888"
-    entrypoint: /src/microns-nda/deploy/zhuokund/notebook.sh
+    entrypoint: /src/microns-nda/deploy/notebook.sh
   bin:
     <<: *common
     entrypoint: /bin/bash
