@@ -12,7 +12,7 @@ x-shared: &common
   volumes:
     - ../../:/src/microns-nda
     - /mnt:/mnt
-    - ${NOTEBOOK_PATH}:/notebook
+    - ${NOTEBOOK_PATH}:/notebooks
     - ${DATA_PATH}:/data
   env_file:
     - .env
