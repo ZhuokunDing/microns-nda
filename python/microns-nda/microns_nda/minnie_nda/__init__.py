@@ -1,5 +1,5 @@
-from microns_nda_api import config
-from . import minnie_nda, minnie_function
+import datajoint.datajoint_plus as djp
+from . import minnie_function, minnie_nda
 
-config.register_bases(config.SCHEMAS.MINNIE_NDA, minnie_nda)
-config.register_bases(config.SCHEMAS.MINNIE_FUNCTION, minnie_function)
+djp.reassign_master_attribute(minnie_nda)
+djp.reassign_master_attribute(minnie_function)
