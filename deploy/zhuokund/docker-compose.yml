@@ -20,6 +20,7 @@ x-shared: &common
 services:
   notebook:
     <<: *common
+    container_name: microns-nda
     ports:
         - "${JUPYTER_HOST:-0.0.0.0}:${JUPYTER_PORT_CONTAINER:-8888}:8888"
     entrypoint: /src/microns-nda/deploy/zhuokund/notebook.sh
