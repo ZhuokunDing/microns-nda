@@ -291,6 +291,125 @@ class OrientationDV231042(djp.Manual):
         )
         return unit_df
 
+@schema
+class OrientationDV231042All(djp.Manual):
+    definition = """
+    # Orientation tuning extracted with the tuning pipeline within dynamic vision (version 2.3.10.4.2)
+    animal_id            : int                          # id number
+    scan_session         : smallint                     # session index for the mouse
+    scan_idx             : smallint                     # number of TIFF stack file
+    pipe_version         : smallint                     # 
+    segmentation_method  : tinyint                      # 
+    direction_hash       : varchar(256)                 # unique identifier for direction configuration
+    direction_response_hash : varchar(256)                 # unique identifier for direction response configuration
+    scan_hash            : varchar(256)                 # configuration of scan dataset
+    ---
+    """
+
+    class Unit(djp.Part):
+        definition = """
+        -> master
+        -> minnie_nda.UnitSource
+        ---
+        success              : tinyint                      # success of least squares optimization
+        mu                   : float                        # center of the first von Mises distribution, this is the preferred direction
+        phi                  : float                        # weight of the first von Mises distribution
+        kappa                : float                        # dispersion of both von Mises distributions
+        scale                : float                        # von Mises amplitude
+        bias                 : float                        # uniform amplitude
+        bvm_mse              : float                        # mean squared error
+        osi                  : float                        # orientation selectivity index
+        dsi                  : float                        # direction selectivity index
+        amp                  : float                        # amplitude
+        uniform_mse          : float                        # mean squared error
+        """
+
+    def pref_ori(self, unit_key=None, clock_convention=True):
+        unit_key = {} if unit_key is None else unit_key
+        unit_df = (
+            (
+                dj.U(*minnie_nda.UnitSource.primary_key, "pref_ori")
+                & (self.Unit & self & unit_key).proj(pref_ori="mu")
+            )
+            .fetch(format="frame")
+            .reset_index()
+        )
+        if clock_convention:
+            unit_df["pref_ori"] = (
+                -unit_df["pref_ori"] + np.pi / 2
+            ) % np.pi  # convert to clock convention (horizontal bar moving upward is 0 and orientation increases clockwise)
+        else:
+            unit_df["pref_ori"] = unit_df["pref_ori"] % np.pi
+        return unit_df
+
+    def pref_dir(self, unit_key=None, clock_convention=False):  # defaults to math convention, where vertical bar moving right is 0 and orientation increases counterclockwise
+        unit_key = {} if unit_key is None else unit_key
+        unit_df = (
+            (
+                dj.U(*minnie_nda.UnitSource.primary_key, "pref_dir")
+                & (self.Unit & self & unit_key).proj(pref_dir="mu")
+            )
+            .fetch(format="frame")
+            .reset_index()
+        )
+        if clock_convention:
+            unit_df["pref_dir"] = (
+                -unit_df["pref_dir"] + np.pi / 2
+            ) % (2 * np.pi)  # convert to clock convention (horizontal bar moving upward is 0 and orientation increases clockwise)
+        return unit_df
+    
+    def selectivity(self, unit_key=None, percentile=True):
+        unit_key = {} if unit_key is None else unit_key
+        df = (
+            (
+                dj.U(*minnie_nda.UnitSource.primary_key, "selectivity")
+                & (self.Unit & self & unit_key).proj(selectivity="osi")
+            )
+            .fetch(format="frame")
+            .reset_index()
+        )
+        if percentile:
+            df["selectivity"] = df["selectivity"].rank(pct=True)
+        return df
+    
+    def dir_selectivity(self, unit_key=None, percentile=True):
+        unit_key = {} if unit_key is None else unit_key
+        df = (
+            (
+                dj.U(*minnie_nda.UnitSource.primary_key, "selectivity")
+                & (self.Unit & self & unit_key).proj(selectivity="dsi")
+            )
+            .fetch(format="frame")
+            .reset_index()
+        )
+        if percentile:
+            df["selectivity"] = df["selectivity"].rank(pct=True)
+        return df
+
+    def tuning(self, unit_key=None):
+        tuning_dir = djp.create_dj_virtual_module(
+            "dv_tunings_v4_direction", "dv_tunings_v4_direction"
+        )
+        unit_direction_df = (
+            (
+                tuning_dir.DirectionResponse.Unit * tuning_dir.DirectionConfig.Mean
+                & self
+                & unit_key
+            )
+            .fetch(format="frame")
+            .reset_index()
+        )
+        unit_df = (
+            unit_direction_df.groupby(["session", "scan_idx", "unit_id"])
+            .apply(lambda df: df.sort_values("direction").direction.values)
+            .to_frame(name="direction")
+        )
+        unit_df["response_mean"] = (
+            unit_direction_df.groupby(["session", "scan_idx", "unit_id"])
+            .apply(lambda df: df.sort_values("direction").response_mean.values)
+            .to_frame()
+        )
+        return unit_df
 
 ## Aggregation tables
 @schema
@@ -319,6 +438,11 @@ class Orientation(djp.Lookup):
         key = self.fetch("KEY") if key is None else (self & key).fetch("KEY")
         unit_key = {} if unit_key is None else unit_key
         return (self & key).part_table()._pref_ori(unit_key=unit_key)
+    
+    def _pref_dir(self, key=None, unit_key=None):
+        key = self.fetch("KEY") if key is None else (self & key).fetch("KEY")
+        unit_key = {} if unit_key is None else unit_key
+        return (self & key).part_table()._pref_dir(unit_key=unit_key)
 
     def _selectivity(self, key=None, unit_key=None, percentile=False):
         key = self.fetch("KEY") if key is None else (self & key).fetch("KEY")
@@ -327,6 +451,15 @@ class Orientation(djp.Lookup):
             (self & key)
             .part_table()
             ._selectivity(unit_key=unit_key, percentile=percentile)
+        )
+
+    def _dir_selectivity(self, key=None, unit_key=None, percentile=False):
+        key = self.fetch("KEY") if key is None else (self & key).fetch("KEY")
+        unit_key = {} if unit_key is None else unit_key
+        return (
+            (self & key)
+            .part_table()
+            ._dir_selectivity(unit_key=unit_key, percentile=percentile)
         )
 
     class DV11521GD(djp.Part):
@@ -379,6 +512,43 @@ class Orientation(djp.Lookup):
                 unit_key=unit_key, percentile=percentile
             )
 
+    class DV231042All(djp.Part):
+        _source = "OrientationDV231042All"
+        source = eval(_source)
+        enable_hashing = True
+        hash_name = "orientation_hash"
+        hashed_attrs = source.primary_key
+        definition = """
+        #
+        -> master
+        ---
+        -> OrientationDV231042All
+        """
+
+        def _pref_ori(self, key=None, unit_key=None):
+            key = self.fetch() if key is None else (self & key).fetch()
+            unit_key = {} if unit_key is None else unit_key
+            return (self.source & key).pref_ori(unit_key=unit_key)
+
+        def _pref_dir(self, key=None, unit_key=None):
+            key = self.fetch() if key is None else (self & key).fetch()
+            unit_key = {} if unit_key is None else unit_key
+            return (self.source & key).pref_dir(unit_key=unit_key)
+
+        def _selectivity(self, key=None, unit_key=None, percentile=False):
+            key = self.fetch() if key is None else (self & key).fetch()
+            unit_key = {} if unit_key is None else unit_key
+            return (self.source & key).selectivity(
+                unit_key=unit_key, percentile=percentile
+            )
+
+        def _dir_selectivity(self, key=None, unit_key=None, percentile=False):
+            key = self.fetch() if key is None else (self & key).fetch()
+            unit_key = {} if unit_key is None else unit_key
+            return (self.source & key).dir_selectivity(
+                unit_key=unit_key, percentile=percentile
+            )
+
 
 @schema
 class OrientationScanInfo(djp.Computed):
@@ -396,11 +566,24 @@ class OrientationScanInfo(djp.Computed):
         unit_key = {} if unit_key is None else unit_key
         assert minnie_nda.Scan().aggr(self, count="count(*)").fetch("count").max() == 1
         return (Orientation & self)._pref_ori(unit_key=unit_key)
+    
+    def pref_dir(self, unit_key=None):
+        # return the preferred orientation of requested units, return all units by default
+        unit_key = {} if unit_key is None else unit_key
+        assert minnie_nda.Scan().aggr(self, count="count(*)").fetch("count").max() == 1
+        return (Orientation & self)._pref_dir(unit_key=unit_key)
 
     def selectivity(self, unit_key=None, percentile=False):
         unit_key = {} if unit_key is None else unit_key
         assert minnie_nda.Scan().aggr(self, count="count(*)").fetch("count").max() == 1
         return (Orientation & self)._selectivity(
+            unit_key=unit_key, percentile=percentile
+        )
+
+    def dir_selectivity(self, unit_key=None, percentile=False):
+        unit_key = {} if unit_key is None else unit_key
+        assert minnie_nda.Scan().aggr(self, count="count(*)").fetch("count").max() == 1
+        return (Orientation & self)._dir_selectivity(
             unit_key=unit_key, percentile=percentile
         )
 
@@ -450,8 +633,18 @@ class OrientationScanSet(djp.Lookup):
             unit_key=unit_key
         )
 
+    def pref_dir(self, unit_key=None):
+        return (OrientationScanInfo & (self * self.Member).proj()).pref_dir(
+            unit_key=unit_key
+        )
+
     def selectivity(self, unit_key=None, percentile=False):
         return (OrientationScanInfo & (self * self.Member).proj()).selectivity(
+            unit_key=unit_key, percentile=percentile
+        )
+    
+    def dir_selectivity(self, unit_key=None, percentile=False):
+        return (OrientationScanInfo & (self * self.Member).proj()).dir_selectivity(
             unit_key=unit_key, percentile=percentile
         )
 
@@ -1041,7 +1234,8 @@ class DynamicModelScore(djp.Lookup, MakerMixin):
         def unit_score(self, part_key=None):
             part_key = {} if part_key is None else part_key
             return (
-                (DynamicModelScore.Nns10Scan3UniqueCcUnitScore * self) & part_key
+            """_summary_
+            """                (DynamicModelScore.Nns10Scan3UniqueCcUnitScore * self) & part_key
             ).proj(..., statistic="model_score")
 
     class Nns10Scan3UniqueCcUnitScore(djp.Part):

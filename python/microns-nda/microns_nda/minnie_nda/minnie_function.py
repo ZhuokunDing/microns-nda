@@ -226,9 +226,121 @@ class OrientationDV11521GD(minnie_function.OrientationDV11521GD, VMMixin):
             len_sec="sum(sec)",
         ).fetch1("len_sec")
 
+class OrientationDV231042All(minnie_function.OrientationDV231042All):
+    class Unit(minnie_function.OrientationDV231042All.Unit):
+        pass
+
+    dv_scan = djp.create_djp_module("dv_scan", "dv_scans_v3_scan")
+    dv_oracle = djp.create_djp_module("dv_oracle", "dv_scans_v3_oracle")
+    dv_nns_scan = djp.create_djp_module("dv_nns_scan", "dv_nns_v10_scan")
+    dv_direction = djp.create_djp_module("dv_direction", "dv_tunings_v4_direction")
+    dv_scan_dataset = dj.create_virtual_module("dv_scan_dataset", "dv_scans_v3_scan_dataset")
+    @classmethod
+    def fill(cls):
+        unit_rel = (
+            cls.dv_direction.BiVonMises().proj(
+                ..., bvm_mse="mse"
+            )
+            * cls.dv_direction.DirectionResponseConfig.Nn10Monet2
+            * cls.dv_direction.DirectionConfig.Mean
+            * cls.dv_nns_scan.ScanConfig.Scan3
+            * cls.dv_direction.OSI
+            * cls.dv_direction.DSI
+            * cls.dv_direction.Uniform.proj(
+                ..., uniform_mse="mse"
+            )
+            & cls.dv_scan_dataset.UnitConfig().All()
+        ).proj(..., scan_session="session") & 'animal_id=17797'
+        master_rel = dj.U(*cls.primary_key) & unit_rel
+        cls.insert(master_rel, ignore_extra_fields=True, skip_duplicates=True)
+        cls.Unit.insert(unit_rel, ignore_extra_fields=True, skip_duplicates=True)
+
+    def stimulus_type(self, key=None):
+        # returns list of stimuli used in the tuning
+        # elements of the list are stimulus_type in the pipeline_stimulus.Condition table
+        key = self.fetch1("KEY") if key is None else (self & key).fetch1("KEY")
+        assert (
+            (self & key)
+            * self.dv_direction.DirectionConfig.Mean()
+            * self.dv_direction.DirectionResponseConfig().Nn10Monet2()
+        ), "stimulus type not implemented"
+        return [
+            "stimulus.Monet2",
+        ]
+
+    def response_type(self, key=None):
+        # returns {'in_vivo', 'in_silico'}
+        key = self.fetch1("KEY") if key is None else (self & key).fetch1("KEY")
+        assert (
+            (self & key)
+            * self.dv_direction.DirectionConfig.Mean()
+            * self.dv_direction.DirectionResponseConfig().Nn10Monet2()
+        ), "response type not implemented"
+        return "in_silico"
+
+    def scan(self, key=None):
+        key = self.fetch1("KEY") if key is None else (self & key).fetch1("KEY")
+        return ((self & key).proj()).fetch1("animal_id", "scan_session", "scan_idx")
+
+    def len_sec(self, key=None):
+        key = self.fetch1("KEY") if key is None else (self & key).fetch1("KEY")
+        direction_stimulus_rel = (
+            (self & key)
+            * self.dv_direction.DirectionConfig.Mean()
+            * self.dv_direction.DirectionResponseConfig().Nn10Monet2()
+            * self.dv_direction.DirectionStimulusConfig().Monet2()
+        )
+        assert direction_stimulus_rel, "stimulus type not implemented!"
+        return direction_stimulus_rel.proj(sec="duration * n_rng_seeds").fetch1("sec")
+
+    def tuning_curve(self, key=None):
+        key = self.fetch1() if key is None else (self & key).fetch1()
+        cfg_part_table = (self.dv_direction.DirectionConfig & key).fetch1(
+            "direction_type"
+        )
+        cfg_part_table = getattr(self.dv_direction.DirectionConfig, cfg_part_table)
+        cfg_part_table &= key
+        unit_df = pd.DataFrame(
+            (
+                self.dv_direction.DirectionResponse.Unit.proj(
+                    ..., scan_session="session"
+                )
+                * self.dv_direction.DirectionResponse.Direction
+                & cfg_part_table
+                & key
+            ).fetch(
+                "scan_session",
+                "scan_idx",
+                "unit_id",
+                "direction",
+                "response_mean",
+                "response_std",
+                "n_trials",
+                as_dict=True,
+            )
+        )
+        unit_id, direction, response_mean, response_std = [], [], [], []
+        for u, g in unit_df.groupby("unit_id"):
+            data = g.sort_values("direction")[
+                ["direction", "response_mean", "response_std"]
+            ]
+            unit_id.append(u)
+            direction.append(data.direction.to_numpy() / 180 * np.pi)
+            response_mean.append(data.response_mean.to_numpy())
+            response_std.append(data.response_std.to_numpy())
+        tuning_curve_df = pd.DataFrame(
+            dict(
+                unit_id=unit_id,
+                direction=direction,
+                response_mean=response_mean,
+                response_std=response_std,
+                **key,
+            )
+        )
+        return tuning_curve_df
 
 class OrientationDV231042(minnie_function.OrientationDV231042):
-    class Unit(minnie_function.OrientationDV11521GD.Unit):
+    class Unit(minnie_function.OrientationDV231042.Unit):
         pass
 
     dv_scan = djp.create_djp_module("dv_scan", "dv_scans_v3_scan")
@@ -451,6 +563,43 @@ class Orientation(minnie_function.Orientation):
             key = self.fetch1() if key is None else (self & key).fetch1()
             return (OrientationDV231042 & key).tuning_curve()
 
+    class DV231042All(minnie_function.Orientation.DV231042All):
+        @classproperty
+        def source(cls):
+            return eval(super()._source)
+
+        @classmethod
+        def fill(cls):
+            constant_attrs = {
+                "orientation_type": Orientation.DV231042All.__name__,
+            }
+            cls.insert(
+                cls.source,
+                insert_to_master=True,
+                constant_attrs=constant_attrs,
+                ignore_extra_fields=True,
+                skip_duplicates=True,
+            )
+
+        def stimulus_type(self, key=None):
+            key = self.fetch1() if key is None else (self & key).fetch1()
+            return (self.source & key).stimulus_type()
+
+        def response_type(self, key=None):
+            key = self.fetch1() if key is None else (self & key).fetch1()
+            return (self.source & key).response_type()
+
+        def scan(self, key=None):
+            key = self.fetch1() if key is None else (self & key).fetch1()
+            return (self.source & key).scan()
+
+        def len_sec(self, key=None):
+            key = self.fetch1() if key is None else (self & key).fetch1()
+            return (self.source & key).len_sec()
+
+        def tuning_curve(self, key=None):
+            key = self.fetch1() if key is None else (self & key).fetch1()
+            return (OrientationDV231042All & key).tuning_curve()
 
 class OrientationScanInfo(minnie_function.OrientationScanInfo):
     @property
@@ -1181,6 +1330,7 @@ class DynamicModelScore(minnie_function.DynamicModelScore):
             scan_keys = (
                 (
                     cls.virtual_modules["dv_nns_v10_scan"].ModelScore
+                    * cls.virtual_modules["dv_nns_v10_scan"].ScoreConfig.MeanR
                     * cls.virtual_modules["dv_nns_v10_model"].BehaviorConfig.Scan
                 ).proj(..., scan_session="session")
                 * model_maker
@@ -1254,6 +1404,7 @@ class DynamicModelScore(minnie_function.DynamicModelScore):
             scan_keys = (
                 (
                     cls.virtual_modules["dv_nns_v10_scan"].ModelScore
+                    * cls.virtual_modules["dv_nns_v10_scan"].ScoreConfig.MeanR
                     * cls.virtual_modules["dv_nns_v10_model"].BehaviorConfig.Scan
                 ).proj(..., scan_session="session")
                 * model_maker
