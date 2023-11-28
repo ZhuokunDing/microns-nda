@@ -12,5 +12,6 @@ minnie_nda = {}
 function_path = base_path / 'function'
 minnie_function = {
     'resp_array': djp.make_store_dict(function_path / 'resp_array'),
+    'resp_array_file': djp.make_store_dict(function_path / 'resp_array_file'),
     'corr_array': djp.make_store_dict(function_path / 'corr_array'),
 }

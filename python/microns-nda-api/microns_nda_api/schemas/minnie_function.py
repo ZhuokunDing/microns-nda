@@ -1360,6 +1360,37 @@ class RespArrNnsV10(djp.Manual):
 
 
 @schema
+class RespArrNnsV10File(djp.Manual):
+    definition = """
+    resp_array_idx          : int unsigned
+    ---
+    -> DynamicModelScanSet
+    resp_array              : filepath@resp_array_file
+    description             : varchar(255)          # description of the response array
+    """
+
+    class Unit(djp.Part):
+        definition = """
+        -> master
+        -> minnie_nda.UnitSource
+        ---
+        row_idx             : int unsigned          # row index in the response array
+        """
+
+    class Condition(djp.Part):
+        stimulus = djp.create_dj_virtual_module(
+            "pipeline_stimulus", "pipeline_stimulus"
+        )
+        definition = """
+        -> master
+        -> djp.create_dj_virtual_module('pipeline_stimulus', 'pipeline_stimulus').Condition
+        ---
+        col_idx_start             : int unsigned     # start index of the condition in the response array
+        col_idx_end               : int unsigned     # end index of the condition in the response array
+        """
+
+
+@schema
 class RespCorr(djp.Lookup):
     hash_part_table_names = True
     hash_name = "resp_corr_hash"
