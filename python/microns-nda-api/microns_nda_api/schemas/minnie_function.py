@@ -1389,6 +1389,12 @@ class RespArrNnsV10File(djp.Manual):
         col_idx_end               : int unsigned     # end index of the condition in the response array
         """
 
+    class Stimuli(djp.Part):
+        definition = """
+        -> master
+        ---
+        stimulus_array      : filepath@resp_array_file
+        """
 
 @schema
 class RespCorr(djp.Lookup):
